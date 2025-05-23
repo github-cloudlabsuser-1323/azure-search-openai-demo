@@ -1,3 +1,7 @@
+# approach.py
+# This module defines the base Approach class and related data structures for retrieval-augmented generation (RAG) and agentic retrieval in the Azure Search OpenAI Demo backend.
+# It provides abstractions for document search, embedding computation, chat completion, and agentic retrieval workflows.
+
 import os
 from abc import ABC
 from collections.abc import AsyncGenerator, Awaitable
@@ -37,6 +41,7 @@ from approaches.promptmanager import PromptManager
 from core.authentication import AuthenticationHelper
 
 
+# Data class representing a document retrieved from the search index or agentic retrieval.
 @dataclass
 class Document:
     id: Optional[str] = None
@@ -52,6 +57,7 @@ class Document:
     search_agent_query: Optional[str] = None
 
     def serialize_for_results(self) -> dict[str, Any]:
+        # Serializes the Document instance for API results.
         result_dict = {
             "id": self.id,
             "content": self.content,
@@ -79,6 +85,7 @@ class Document:
         return result_dict
 
 
+# Data class representing a step in the reasoning or thought process.
 @dataclass
 class ThoughtStep:
     title: str
@@ -86,16 +93,19 @@ class ThoughtStep:
     props: Optional[dict[str, Any]] = None
 
     def update_token_usage(self, usage: CompletionUsage) -> None:
+        # Updates the token usage property for this thought step.
         if self.props:
             self.props["token_usage"] = TokenUsageProps.from_completion_usage(usage)
 
 
+# Data class for holding text and image data points.
 @dataclass
 class DataPoints:
     text: Optional[list[str]] = None
     images: Optional[list] = None
 
 
+# Data class for holding extra information such as data points, thoughts, and follow-up questions.
 @dataclass
 class ExtraInfo:
     data_points: DataPoints
@@ -103,6 +113,7 @@ class ExtraInfo:
     followup_questions: Optional[list[Any]] = None
 
 
+# Data class for tracking token usage statistics.
 @dataclass
 class TokenUsageProps:
     prompt_tokens: int
@@ -112,6 +123,7 @@ class TokenUsageProps:
 
     @classmethod
     def from_completion_usage(cls, usage: CompletionUsage) -> "TokenUsageProps":
+        # Creates a TokenUsageProps instance from OpenAI CompletionUsage.
         return cls(
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
@@ -122,13 +134,13 @@ class TokenUsageProps:
         )
 
 
-# GPT reasoning models don't support the same set of parameters as other models
-# https://learn.microsoft.com/azure/ai-services/openai/how-to/reasoning
+# Data class for GPT reasoning model support features.
 @dataclass
 class GPTReasoningModelSupport:
     streaming: bool
 
 
+# Abstract base class for all retrieval and chat approaches.
 class Approach(ABC):
     # List of GPT reasoning models support
     GPT_REASONING_MODELS = {
@@ -156,6 +168,7 @@ class Approach(ABC):
         prompt_manager: PromptManager,
         reasoning_effort: Optional[str] = None,
     ):
+        # Initializes the Approach with all required clients and configuration.
         self.search_client = search_client
         self.openai_client = openai_client
         self.auth_helper = auth_helper
@@ -173,6 +186,7 @@ class Approach(ABC):
         self.include_token_usage = True
 
     def build_filter(self, overrides: dict[str, Any], auth_claims: dict[str, Any]) -> Optional[str]:
+        # Builds a filter string for search queries based on category and security claims.
         include_category = overrides.get("include_category")
         exclude_category = overrides.get("exclude_category")
         security_filter = self.auth_helper.build_security_filters(overrides, auth_claims)
@@ -199,6 +213,7 @@ class Approach(ABC):
         minimum_reranker_score: Optional[float] = None,
         use_query_rewriting: Optional[bool] = None,
     ) -> list[Document]:
+        # Performs a search using the Azure Cognitive Search client with various options.
         search_text = query_text if use_text_search else ""
         search_vectors = vectors if use_vector_search else []
         if use_semantic_ranker:
@@ -263,6 +278,7 @@ class Approach(ABC):
         max_docs_for_reranker: Optional[int] = None,
         results_merge_strategy: Optional[str] = None,
     ) -> tuple[KnowledgeAgentRetrievalResponse, list[Document]]:
+        # Runs agentic retrieval using the KnowledgeAgentRetrievalClient and returns the response and documents.
         # STEP 1: Invoke agentic retrieval
         response = await agent_client.retrieve(
             retrieval_request=KnowledgeAgentRetrievalRequest(
@@ -341,6 +357,7 @@ class Approach(ABC):
             ]
 
     def get_citation(self, sourcepage: str, use_image_citation: bool) -> str:
+        # Returns a formatted citation string for a source page, handling images and PDFs.
         if use_image_citation:
             return sourcepage
         else:
@@ -353,6 +370,7 @@ class Approach(ABC):
             return sourcepage
 
     async def compute_text_embedding(self, q: str):
+        # Computes a text embedding for the given query using the OpenAI client.
         SUPPORTED_DIMENSIONS_MODEL = {
             "text-embedding-ada-002": False,
             "text-embedding-3-small": True,
@@ -377,6 +395,7 @@ class Approach(ABC):
         return VectorizedQuery(vector=query_vector, k_nearest_neighbors=50, fields=self.embedding_field)
 
     async def compute_image_embedding(self, q: str):
+        # Computes an image embedding for the given query using the vision endpoint.
         endpoint = urljoin(self.vision_endpoint, "computervision/retrieval:vectorizeText")
         headers = {"Content-Type": "application/json"}
         params = {"api-version": "2024-02-01", "model-version": "2023-04-15"}
@@ -393,6 +412,7 @@ class Approach(ABC):
         return VectorizedQuery(vector=image_query_vector, k_nearest_neighbors=50, fields="imageEmbedding")
 
     def get_system_prompt_variables(self, override_prompt: Optional[str]) -> dict[str, str]:
+        # Returns variables for system prompt customization based on overrides.
         # Allows client to replace the entire prompt, or to inject into the existing prompt using >>>
         if override_prompt is None:
             return {}
@@ -402,6 +422,7 @@ class Approach(ABC):
             return {"override_prompt": override_prompt}
 
     def get_response_token_limit(self, model: str, default_limit: int) -> int:
+        # Returns the appropriate token limit for the response based on the model.
         if model in self.GPT_REASONING_MODELS:
             return self.RESPONSE_REASONING_DEFAULT_TOKEN_LIMIT
 
@@ -420,6 +441,7 @@ class Approach(ABC):
         n: Optional[int] = None,
         reasoning_effort: Optional[ChatCompletionReasoningEffort] = None,
     ) -> Union[Awaitable[ChatCompletion], Awaitable[AsyncStream[ChatCompletionChunk]]]:
+        # Creates a chat completion request to the OpenAI API with the specified parameters.
         if chatgpt_model in self.GPT_REASONING_MODELS:
             params: dict[str, Any] = {
                 # max_tokens is not supported
@@ -464,6 +486,7 @@ class Approach(ABC):
         usage: Optional[CompletionUsage] = None,
         reasoning_effort: Optional[ChatCompletionReasoningEffort] = None,
     ) -> ThoughtStep:
+        # Formats a ThoughtStep for chat completion, including model and token usage info.
         properties: dict[str, Any] = {"model": model}
         if deployment:
             properties["deployment"] = deployment
@@ -482,6 +505,7 @@ class Approach(ABC):
         session_state: Any = None,
         context: dict[str, Any] = {},
     ) -> dict[str, Any]:
+        # Abstract method to run the approach and return a result dictionary.
         raise NotImplementedError
 
     async def run_stream(
@@ -490,4 +514,5 @@ class Approach(ABC):
         session_state: Any = None,
         context: dict[str, Any] = {},
     ) -> AsyncGenerator[dict[str, Any], None]:
+        # Abstract method to run the approach as a stream and yield result dictionaries.
         raise NotImplementedError
